@@ -25,7 +25,16 @@ def collect_reviews(url, all_hotels={}, nearby_hotel_urls=[]):
         print("continue to next URL")
         
     else:
-        nearby_hotel_urls = get_nearby_businesses(url)
+        print("getting nearby hotels to scrape")
+    
+        response = requests.get(url)
+    
+        d = Selector(response)
+    
+        nearby = d.xpath("//a[starts-with(@class,'hotels-hotel-review-location-NearbyLink__seeNearby')]/@href").extract()
+        nearby_hotel = "".join([item for item in nearby if "HotelsNear" in item])
+        url = "https://www.tripadvisor.co.uk" + nearby_hotel
+        nearby_hotel_urls = get_nearby_listings(url)
     
     print("scraping nearby hotels")
     print(f"scraping {nearby_hotel_urls[-1]}...")
@@ -40,7 +49,7 @@ def collect_reviews(url, all_hotels={}, nearby_hotel_urls=[]):
         print("terminating the scraper...")
         return all_hotels
 
-def parse_reviews(url, acc=[]):
+def parse_reviews(url, acc=[], failed_scrape=0):
     
     if acc!=[]:
         final_output = acc
@@ -48,24 +57,31 @@ def parse_reviews(url, acc=[]):
         final_output = []
         
     response = requests.get(url)
-    
+    print(response)
     d = Selector(response)
     
     content_card = d.xpath("//div[starts-with(@class, 'ui_card hotels-hotel-review-community-content-Card')]")
     
     ind_reviews = content_card.xpath(
         "div[starts-with(@class,'hotels-hotel-review-community-content-review-list-parts-SingleReview__reviewContainer')]")
-    
+
     print("getting review IDs...")
     # get ids for each individual reviews
     review_ids = ind_reviews.xpath("@data-reviewid").extract()
-    
+    print(review_ids)
+    if review_ids == []:
+        failed_scrape += 1
+        if failed_scrape <= 5:
+            return parse_reviews(url, acc=final_output, failed_scrape=failed_scrape)
+        else:
+            pass
+
     print("starting individual review scrape...")
     final_output.extend(parse_individual_reviews(review_ids, ind_reviews))
-    
+
     try:
         print("moving onto next page...")
-        next_page = ind_reviews.xpath("//a[contains(text(), 'Next')]/@href").extract()[0]
+        next_page = d.xpath("//a[starts-with(@class, 'ui_button nav next')]/@href").extract()[0]
         url = f'https://www.tripadvisor.co.uk{next_page}'
         return parse_reviews(url, acc=final_output)
     
@@ -203,52 +219,52 @@ def parse_inner_review(full_review_link):
         inner_review_dict["trip_type"] = "error"
     
     return inner_review_dict
-    
 
-def get_nearby_businesses(url):
-    
-    print("getting nearby hotels to scrape")
-    
-    response = requests.get(url)
-    
-    d = Selector(response)
-    
-    nearby = d.xpath("//a[starts-with(@class,'hotels-hotel-review-location-NearbyLink__seeNearby')]/@href").extract()
-    nearby_hotel = "".join([item for item in nearby if "HotelsNear" in item])
-    url = "https://www.tripadvisor.co.uk" + nearby_hotel
-    
+
+def get_nearby_listings(url):
     response = requests.get(url)
     
     d = Selector(response)
     
     print("getting first set of listings...")
     page_listings = d.xpath("//div[@class='listing_title']/a/@href").extract()
+
+    try:
+        next_page = d.xpath("//a[starts-with(@class, 'nav next')]/@href").extract()[0]
+    except:
+        get_nearby_listings(url)
+
+    return scrape_listing_links(next_page, page_listings)
+
     
-    next_page = d.xpath("//a[contains(text(), 'Next')]/@href").extract()[0]
+
+def scrape_listing_links(next_page, page_listings=[], failed_scrape=0):
     
+    print("moving to next page...")
+    url = "https://www.tripadvisor.co.uk" + next_page
+    response = requests.get(url)
+    d = Selector(response)
     
-    while next_page:
-        
-        print("moving to next page...")
-        url = "https://www.tripadvisor.co.uk" + next_page
-        response = requests.get(url)
-        d = Selector(response)
-        
-        print("getting more listings...")
-        try:
-            page_listings.extend(d.xpath("//div[@class='listing_title']/a/@href").extract())
-        except:
-            pass
-        
-        print("checking for next page...")
-        try:
-            print("next page found")
-            next_page = d.xpath("//a[contains(text(), 'Next')]/@href").extract()[0]
-        except:
+    print("getting more listings...")
+    try:
+        page_listings.extend(d.xpath("//div[@class='listing_title']/a/@href").extract())
+    except:
+        pass
+    
+    print("checking for next page...")
+    try:
+        print("next page found")
+        next_page = d.xpath("//a[starts-with(@class, 'ui_button nav next')]/@href").extract()[0]
+        return scrape_listing_links(next_page, page_listings=page_listings)
+    
+    except:
+        failed_scrape += 1
+        if failed_scrape <= 5:
+            scrape_listing_links(next_page, page_listings=page_listings, failed_scrape=failed_scrape)
+        else:
             print("no more pages. Ending scrape.")
-            next_page = False
-            
-    
+
+        
     return list(set(page_listings))
 
 if __name__ == "__main__":
